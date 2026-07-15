@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import '../../ingestion/models/transaction_model.dart';
@@ -8,10 +9,24 @@ class TransactionDatabase {
   TransactionDatabase._internal();
 
   Database? _db;
+  Completer<Database>? _initCompleter;
 
   Future<Database> get database async {
     if (_db != null && _db!.isOpen) return _db!;
-    _db = await _initDb();
+
+    // If another call is already opening the DB, wait for that instead
+    // of racing to open it twice.
+    if (_initCompleter != null) return _initCompleter!.future;
+
+    _initCompleter = Completer<Database>();
+    try {
+      _db = await _initDb();
+      _initCompleter!.complete(_db);
+    } catch (e) {
+      _initCompleter!.completeError(e);
+      _initCompleter = null;
+      rethrow;
+    }
     return _db!;
   }
 
@@ -59,8 +74,6 @@ class TransactionDatabase {
     return tx.copyWith(id: id > 0 ? id : null);
   }
 
-  /// HIGH PERFORMANCE: Inserts multiple transactions in a single batch
-  /// This is much more battery-efficient for initial imports.
   Future<void> insertTransactionsBatch(List<TransactionModel> transactions) async {
     if (transactions.isEmpty) return;
     final db = await database;
@@ -77,14 +90,29 @@ class TransactionDatabase {
     });
   }
 
-  Future<List<TransactionModel>> getTransactions({int limit = 50, int offset = 0}) async {
+  Future<List<TransactionModel>> getTransactionsBefore({
+    DateTime? beforeTimestamp,
+    int? beforeId,
+    int limit = 30,
+  }) async {
     final db = await database;
-    final maps = await db.query(
-      'transactions', 
-      orderBy: 'timestamp DESC',
-      limit: limit,
-      offset: offset,
-    );
+    List<Map<String, dynamic>> maps;
+
+    if (beforeTimestamp == null || beforeId == null) {
+      maps = await db.query('transactions', orderBy: 'timestamp DESC, id DESC', limit: limit);
+    } else {
+      maps = await db.query(
+        'transactions',
+        where: '(timestamp < ?) OR (timestamp = ? AND id < ?)',
+        whereArgs: [
+          beforeTimestamp.millisecondsSinceEpoch,
+          beforeTimestamp.millisecondsSinceEpoch,
+          beforeId,
+        ],
+        orderBy: 'timestamp DESC, id DESC',
+        limit: limit,
+      );
+    }
     return maps.map((m) => TransactionModel.fromMap(m)).toList();
   }
 
@@ -92,6 +120,7 @@ class TransactionDatabase {
     if (_db != null && _db!.isOpen) {
       await _db!.close();
       _db = null;
+      _initCompleter = null;
     }
   }
 }

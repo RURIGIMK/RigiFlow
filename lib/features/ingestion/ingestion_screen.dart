@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:intl/intl.dart';
+import 'package:permission_handler/permission_handler.dart' as ph;
 import '../../core/theme.dart';
 import '../ingestion/models/transaction_model.dart';
 import '../transactions/database/transaction_db.dart';
@@ -21,14 +22,12 @@ class _IngestionScreenState extends State<IngestionScreen> {
   StreamSubscription? _transactionSubscription;
 
   List<TransactionModel> _transactions = [];
-  final Set<int> _displayedIds = {}; // Track IDs to prevent duplicates
-  
-  bool _isLoading = false;
+  final Set<int> _newArrivalIds = {}; // Only these get the entrance animation
+
   bool _isChecking = true;
   bool _permissionsGranted = false;
-  
-  int _offset = 0;
-  final int _limit = 50;
+
+  final int _pageSize = 30;
   bool _hasMore = true;
   bool _isFetchingMore = false;
 
@@ -50,108 +49,68 @@ class _IngestionScreenState extends State<IngestionScreen> {
   }
 
   void _onScroll() {
-    // Optimization: Start fetching more items much earlier (500px buffer)
-    if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 500) {
-      if (!_isFetchingMore && _hasMore) {
-        _loadMoreTransactions();
-      }
+    if (_scrollController.position.pixels >=
+        _scrollController.position.maxScrollExtent - 500) {
+      if (!_isFetchingMore && _hasMore) _loadMoreTransactions();
     }
   }
 
   Future<void> _initializeData() async {
-    try {
-      await _loadInitialTransactions();
-      final granted = await _smsService.hasPermissions();
-      if (mounted) {
-        setState(() {
-          _isChecking = false;
-          if (granted) {
-            _permissionsGranted = true;
-            _startLiveStream();
-          }
-        });
-      }
-    } catch (e) {
-      if (mounted) setState(() => _isChecking = false);
+    final granted = await _smsService.hasPermissions();
+    await _loadFirstPage();
+    if (!mounted) return;
+    setState(() {
+      _isChecking = false;
+      _permissionsGranted = granted;
+    });
+    if (granted) {
+      _smsService.startListening();
+      _listenForLiveTransactions();
     }
   }
 
-  void _startLiveStream() {
-    _smsService.startListening();
+  void _listenForLiveTransactions() {
     _transactionSubscription?.cancel();
     _transactionSubscription = _smsService.newTransactions.listen((tx) {
-      if (mounted && tx.id != null && !_displayedIds.contains(tx.id)) {
+      if (mounted && tx.id != null) {
         setState(() {
           _transactions.insert(0, tx);
-          _displayedIds.add(tx.id!);
-          _offset++; 
+          _newArrivalIds.add(tx.id!);
         });
       }
     });
   }
 
-  Future<void> _loadInitialTransactions() async {
-    try {
-      final txs = await _db.getTransactions(limit: _limit, offset: 0);
-      if (!mounted) return;
-      setState(() {
-        _transactions = txs;
-        _displayedIds.addAll(txs.where((t) => t.id != null).map((t) => t.id!));
-        _offset = txs.length;
-        _hasMore = txs.length == _limit;
-      });
-    } catch (e) {
-      debugPrint('Error loading transactions: $e');
-    }
+  Future<void> _loadFirstPage() async {
+    final txs = await _db.getTransactionsBefore(limit: _pageSize);
+    if (!mounted) return;
+    setState(() {
+      _transactions = txs;
+      _hasMore = txs.length == _pageSize;
+    });
   }
 
   Future<void> _loadMoreTransactions() async {
-    if (_isFetchingMore || !_hasMore) return;
+    if (_isFetchingMore || !_hasMore || _transactions.isEmpty) return;
     setState(() => _isFetchingMore = true);
-    try {
-      final txs = await _db.getTransactions(limit: _limit, offset: _offset);
-      if (!mounted) return;
-      setState(() {
-        // Only add transactions we don't already have in memory
-        for (var tx in txs) {
-          if (tx.id != null && !_displayedIds.contains(tx.id)) {
-            _transactions.add(tx);
-            _displayedIds.add(tx.id!);
-          }
-        }
-        _offset += txs.length;
-        _hasMore = txs.length == _limit;
-        _isFetchingMore = false;
-      });
-    } catch (e) {
-      if (mounted) setState(() => _isFetchingMore = false);
-    }
+
+    final last = _transactions.last;
+    final txs = await _db.getTransactionsBefore(
+      beforeTimestamp: last.timestamp,
+      beforeId: last.id,
+      limit: _pageSize,
+    );
+
+    if (!mounted) return;
+    setState(() {
+      _transactions.addAll(txs);
+      _hasMore = txs.length == _pageSize;
+      _isFetchingMore = false;
+    });
   }
 
-  Future<void> _requestPermissionsAndSync() async {
-    setState(() => _isLoading = true);
-    try {
-      final granted = await _smsService.requestPermissions();
-      if (!mounted) return;
-
-      if (!granted) {
-        setState(() => _isLoading = false);
-        return;
-      }
-
-      await _smsService.importExistingInbox();
-      await _loadInitialTransactions();
-      
-      if (mounted) {
-        setState(() {
-          _permissionsGranted = true;
-          _isLoading = false;
-        });
-        _startLiveStream();
-      }
-    } catch (e) {
-      if (mounted) setState(() => _isLoading = false);
-    }
+  Future<void> _openAppSettingsForPermission() async {
+    await ph.openAppSettings();
   }
 
   @override
@@ -159,51 +118,43 @@ class _IngestionScreenState extends State<IngestionScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Transactions'),
-        actions: [
-          if (_permissionsGranted) const _LiveSyncIndicator(),
-        ],
+        actions: [if (_permissionsGranted) const _LiveSyncIndicator()],
       ),
       body: Column(
         children: [
           if (!_isChecking && !_permissionsGranted)
-            _ConnectButton(
-              isLoading: _isLoading,
-              onPressed: _requestPermissionsAndSync,
-            ),
-          
+            _PermissionDeniedBanner(onOpenSettings: _openAppSettingsForPermission),
           Expanded(
-            child: _isChecking 
-              ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
-              : _transactions.isEmpty && !_isLoading
+            child: _isChecking
+                ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
+                : _transactions.isEmpty
                 ? const _EmptyState()
                 : ListView.builder(
-                    controller: _scrollController,
-                    // PERFORMANCE: High cache extent ensures top items stay in memory when you scroll down
-                    cacheExtent: 2500, 
-                    addAutomaticKeepAlives: true,
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    itemCount: _transactions.length + (_hasMore ? 1 : 0),
-                    itemBuilder: (context, index) {
-                      if (index == _transactions.length) {
-                        return const Center(
-                          child: Padding(
-                            padding: EdgeInsets.all(24.0),
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                        );
-                      }
-                      final tx = _transactions[index];
-                      return _TransactionTile(
-                        key: ValueKey(tx.id), // Stable key based on DB ID
-                        tx: tx,
-                        isIn: tx.direction == TransactionDirection.moneyIn,
-                        dateFormat: _dateFormat,
-                        currencyFormat: _currencyFormat,
-                        // Only animate if it's the very first time we've seen this item in the list
-                        shouldAnimate: index == 0 && _transactions.length > _limit,
-                      );
-                    },
-                  ),
+              controller: _scrollController,
+              cacheExtent: 1500,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              itemCount: _transactions.length + (_hasMore ? 1 : 0),
+              itemBuilder: (context, index) {
+                if (index == _transactions.length) {
+                  return const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(24.0),
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  );
+                }
+                final tx = _transactions[index];
+                final isNew = tx.id != null && _newArrivalIds.contains(tx.id);
+                return _TransactionTile(
+                  key: ValueKey(tx.id ?? tx.rawSms.hashCode),
+                  tx: tx,
+                  isIn: tx.direction == TransactionDirection.moneyIn,
+                  dateFormat: _dateFormat,
+                  currencyFormat: _currencyFormat,
+                  shouldAnimate: isNew,
+                );
+              },
+            ),
           ),
         ],
       ),
@@ -231,14 +182,15 @@ class _TransactionTile extends StatefulWidget {
   State<_TransactionTile> createState() => _TransactionTileState();
 }
 
-class _TransactionTileState extends State<_TransactionTile> with AutomaticKeepAliveClientMixin {
+class _TransactionTileState extends State<_TransactionTile>
+    with AutomaticKeepAliveClientMixin {
   @override
-  bool get wantKeepAlive => true; // Prevents "disappearing" on scroll
+  bool get wantKeepAlive => true;
 
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    
+
     final content = RepaintBoundary(
       child: Container(
         margin: const EdgeInsets.only(bottom: 12),
@@ -269,16 +221,16 @@ class _TransactionTileState extends State<_TransactionTile> with AutomaticKeepAl
                     overflow: TextOverflow.ellipsis,
                   ),
                   const SizedBox(height: 2),
-                  Text(widget.dateFormat.format(widget.tx.timestamp), 
-                       style: Theme.of(context).textTheme.bodySmall),
+                  Text(widget.dateFormat.format(widget.tx.timestamp),
+                      style: Theme.of(context).textTheme.bodySmall),
                 ],
               ),
             ),
             Text(
               '${widget.isIn ? '+' : '-'}${widget.currencyFormat.format(widget.tx.amount)}',
               style: AppTheme.amountStyle(
-                size: 15, 
-                color: widget.isIn ? AppColors.flow : AppColors.textPrimary
+                size: 15,
+                color: widget.isIn ? AppColors.flow : AppColors.textPrimary,
               ),
             ),
           ],
@@ -286,7 +238,6 @@ class _TransactionTileState extends State<_TransactionTile> with AutomaticKeepAl
       ),
     );
 
-    // Only apply animation for new arrivals, otherwise render immediately
     if (widget.shouldAnimate) {
       return content.animate().fadeIn(duration: 400.ms).slideX(begin: 0.1, end: 0);
     }
@@ -311,7 +262,7 @@ class _LiveSyncIndicator extends StatelessWidget {
             const Icon(Icons.bolt, color: AppColors.flow, size: 14),
             const SizedBox(width: 4),
             Text('LIVE', style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              color: AppColors.flow, fontWeight: FontWeight.bold
+              color: AppColors.flow, fontWeight: FontWeight.bold,
             )),
           ],
         ),
@@ -320,22 +271,29 @@ class _LiveSyncIndicator extends StatelessWidget {
   }
 }
 
-class _ConnectButton extends StatelessWidget {
-  final bool isLoading;
-  final VoidCallback onPressed;
-  const _ConnectButton({required this.isLoading, required this.onPressed});
+class _PermissionDeniedBanner extends StatelessWidget {
+  final VoidCallback onOpenSettings;
+  const _PermissionDeniedBanner({required this.onOpenSettings});
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
+    return Container(
+      margin: const EdgeInsets.all(16),
       padding: const EdgeInsets.all(16),
-      child: ElevatedButton.icon(
-        onPressed: isLoading ? null : onPressed,
-        icon: isLoading 
-            ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-            : const Icon(Icons.sms_outlined),
-        label: Text(isLoading ? 'Syncing...' : 'Connect SMS Auto-Tracking'),
-      ).animate().fadeIn().slideY(begin: -0.2, end: 0),
+      decoration: BoxDecoration(
+        color: AppColors.alert.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.warning_amber_rounded, color: AppColors.alert),
+          const SizedBox(width: 12),
+          const Expanded(
+            child: Text('SMS access is off. Enable it in Settings to track transactions.'),
+          ),
+          TextButton(onPressed: onOpenSettings, child: const Text('Open')),
+        ],
+      ),
     );
   }
 }
