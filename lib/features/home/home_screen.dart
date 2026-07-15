@@ -4,6 +4,7 @@ import '../../core/theme.dart';
 import '../../shared/widgets/flow_ribbon_background.dart';
 import '../auth/auth_service.dart';
 import '../ingestion/sms_listener_service.dart';
+import '../ingestion/ingestion_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -16,7 +17,6 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    // Start listening for SMS as soon as the Home screen (main app) loads
     _initSmsListener();
   }
 
@@ -24,8 +24,6 @@ class _HomeScreenState extends State<HomeScreen> {
     final smsService = SmsListenerService();
     final granted = await smsService.hasPermissions();
     if (granted) {
-      // The service now uses a Stream-based architecture and handles DB insertion automatically.
-      // Removed the 'onNewTransaction' parameter to match the new API.
       smsService.startListening();
     }
   }
@@ -85,6 +83,20 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ).animate().fadeIn(delay: 200.ms).slideY(begin: 0.15, end: 0),
               ),
+              const SizedBox(height: 16),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const IngestionScreen()),
+                    ),
+                    icon: const Icon(Icons.receipt_long),
+                    label: const Text('View Transactions'),
+                  ),
+                ),
+              ).animate().fadeIn(delay: 300.ms).slideY(begin: 0.15, end: 0),
             ],
           ),
         ),
