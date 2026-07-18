@@ -22,10 +22,14 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _initSmsListener() async {
     final smsService = SmsListenerService();
-    final granted = await smsService.hasPermissions();
-    if (granted) {
-      smsService.startListening();
-    }
+    try {
+      final state = await smsService
+          .checkPermissionStatus()
+          .timeout(const Duration(seconds: 5), onTimeout: () => SmsPermissionState.denied);
+      if (state == SmsPermissionState.granted) {
+        smsService.startListening();
+      }
+    } catch (_) {}
   }
 
   @override

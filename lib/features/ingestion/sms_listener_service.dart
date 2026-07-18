@@ -22,7 +22,6 @@ void backgroundMessageHandler(SmsMessage message) async {
   await db.close();
 }
 
-/// Reported during import so the UI can show real progress.
 class ImportProgress {
   final int scanned;
   final int total;
@@ -30,6 +29,11 @@ class ImportProgress {
   const ImportProgress({required this.scanned, required this.total, required this.matched});
   double get fraction => total == 0 ? 0 : scanned / total;
 }
+
+/// Richer than a bool so the UI can tell "not yet asked" apart from
+/// "denied but askable again" apart from "permanently denied — must
+/// go to Settings" (Android only allows re-asking twice before this).
+enum SmsPermissionState { granted, denied, permanentlyDenied }
 
 class SmsListenerService {
   static final SmsListenerService _instance = SmsListenerService._internal();
@@ -39,28 +43,34 @@ class SmsListenerService {
   final Telephony _telephony = Telephony.instance;
   final _transactionStreamController = StreamController<TransactionModel>.broadcast();
   bool _isListening = false;
-  bool _isImporting = false; // loop preventor: blocks re-entrant import calls
+  bool _isImporting = false;
 
-  bool? _cachedPermissionStatus;
-
-  // Loop preventors — defense in depth even though the native date
-  // filter should already keep message counts small.
   static const int _maxMessagesToScan = 3000;
   static const Duration _importTimeBudget = Duration(seconds: 25);
 
   Stream<TransactionModel> get newTransactions => _transactionStreamController.stream;
 
-  Future<bool> requestPermissions() async {
-    final granted = await _telephony.requestSmsPermissions;
-    _cachedPermissionStatus = granted ?? false;
-    return _cachedPermissionStatus!;
+  /// Requests via permission_handler — the reliable source of truth.
+  /// telephony is used below purely for reading/listening to SMS, which
+  /// works fine once the OS permission is granted through any path.
+  Future<SmsPermissionState> requestPermissions() async {
+    final status = await ph.Permission.sms.request();
+    return _mapStatus(status);
   }
 
-  Future<bool> hasPermissions() async {
-    if (_cachedPermissionStatus != null) return _cachedPermissionStatus!;
-    final granted = await _telephony.requestSmsPermissions;
-    _cachedPermissionStatus = granted ?? false;
-    return _cachedPermissionStatus!;
+  /// Deliberately NOT cached — always reads Android's real, current
+  /// permission state. This is the fix for the stale-cache bug: a
+  /// permission granted later via system Settings is picked up
+  /// correctly the very next time this is called.
+  Future<SmsPermissionState> checkPermissionStatus() async {
+    final status = await ph.Permission.sms.status;
+    return _mapStatus(status);
+  }
+
+  SmsPermissionState _mapStatus(ph.PermissionStatus status) {
+    if (status.isGranted) return SmsPermissionState.granted;
+    if (status.isPermanentlyDenied) return SmsPermissionState.permanentlyDenied;
+    return SmsPermissionState.denied;
   }
 
   Future<bool> requestBatteryOptimizationExemption() async {
@@ -92,19 +102,14 @@ class SmsListenerService {
     );
   }
 
-  /// Imports SMS from the 1st of last month through today — e.g. run in
-  /// mid-July, this pulls June 1st onward. Reports live progress and is
-  /// guarded against runaway loops on unusually large inboxes.
   Future<int> importExistingInbox({
     void Function(ImportProgress progress)? onProgress,
   }) async {
-    if (_isImporting) return 0; // reentrancy guard
+    if (_isImporting) return 0;
     _isImporting = true;
 
     try {
       final now = DateTime.now();
-      // Dart's DateTime normalizes month=0 to December of the prior year,
-      // so this correctly rolls back across a year boundary too.
       final startDate = DateTime(now.year, now.month - 1, 1);
 
       final messages = await _telephony.getInboxSms(
@@ -122,10 +127,7 @@ class SmsListenerService {
 
       for (final message in messages) {
         scanned++;
-
-        // Loop preventor 1: hard cap regardless of what the filter returned.
         if (scanned > _maxMessagesToScan) break;
-        // Loop preventor 2: time-boxed — stop cleanly and keep partial results.
         if (stopwatch.elapsed > _importTimeBudget) break;
 
         try {
@@ -152,12 +154,9 @@ class SmsListenerService {
             }
           }
         } catch (_) {
-          // Loop preventor 3: one malformed message never stalls the batch.
           continue;
         }
 
-        // Yield to the UI thread periodically so the progress bar actually
-        // animates instead of the app looking frozen mid-import.
         if (scanned % 15 == 0) {
           onProgress?.call(ImportProgress(scanned: scanned, total: total, matched: matched));
           await Future.delayed(Duration.zero);

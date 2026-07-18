@@ -21,14 +21,12 @@ class _PermissionOnboardingScreenState
   int _matchedCount = 0;
   bool _showProgressBar = false;
   bool _showSkip = false;
-  bool _completed = false; // guards against onComplete firing twice
+  bool _completed = false;
   Timer? _skipTimer;
 
   @override
   void initState() {
     super.initState();
-    // Last-resort escape hatch: if anything ever takes suspiciously long,
-    // offer a manual way out so the user is never truly stuck.
     _skipTimer = Timer(const Duration(seconds: 8), () {
       if (mounted && !_completed) setState(() => _showSkip = true);
     });
@@ -53,9 +51,11 @@ class _PermissionOnboardingScreenState
 
     try {
       setState(() => _status = 'Requesting SMS access...');
-      final granted = await smsService
+      final permState = await smsService
           .requestPermissions()
-          .timeout(const Duration(seconds: 15), onTimeout: () => false);
+          .timeout(const Duration(seconds: 15), onTimeout: () => SmsPermissionState.denied);
+
+      final granted = permState == SmsPermissionState.granted;
 
       if (granted) {
         setState(() {
@@ -78,10 +78,7 @@ class _PermissionOnboardingScreenState
             },
           )
               .timeout(const Duration(seconds: 30), onTimeout: () => 0);
-        } catch (_) {
-          // A partial or failed import should never block onboarding —
-          // the user can always retry a full sync later from Settings.
-        }
+        } catch (_) {}
 
         if (mounted) {
           setState(() {
@@ -94,16 +91,11 @@ class _PermissionOnboardingScreenState
           await smsService
               .requestBatteryOptimizationExemption()
               .timeout(const Duration(seconds: 10), onTimeout: () => false);
-        } catch (_) {
-          // Non-critical — battery exemption is a nice-to-have, not a
-          // blocker. The app still works without it, just with possible
-          // background delivery delay.
-        }
+        } catch (_) {}
 
         smsService.startListening();
       }
     } catch (_) {
-      // Absolute safety net for anything unforeseen above.
     } finally {
       _finish();
     }

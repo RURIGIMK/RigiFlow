@@ -15,17 +15,18 @@ class IngestionScreen extends StatefulWidget {
   State<IngestionScreen> createState() => _IngestionScreenState();
 }
 
-class _IngestionScreenState extends State<IngestionScreen> {
+class _IngestionScreenState extends State<IngestionScreen>
+    with WidgetsBindingObserver {
   final SmsListenerService _smsService = SmsListenerService();
   final TransactionDatabase _db = TransactionDatabase();
   final ScrollController _scrollController = ScrollController();
   StreamSubscription? _transactionSubscription;
 
   List<TransactionModel> _transactions = [];
-  final Set<int> _newArrivalIds = {}; // Only these get the entrance animation
+  final Set<int> _newArrivalIds = {};
 
   bool _isChecking = true;
-  bool _permissionsGranted = false;
+  SmsPermissionState _permissionState = SmsPermissionState.denied;
 
   final int _pageSize = 30;
   bool _hasMore = true;
@@ -37,15 +38,45 @@ class _IngestionScreenState extends State<IngestionScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initializeData();
     _scrollController.addListener(_onScroll);
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _transactionSubscription?.cancel();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  /// Fires when the app comes back to the foreground — e.g. the user
+  /// tapped "Open Settings", granted SMS access there, and returned.
+  /// This is what makes the fix actually seamless rather than requiring
+  /// the user to force-close and reopen the app.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _recheckPermissionOnResume();
+    }
+  }
+
+  Future<void> _recheckPermissionOnResume() async {
+    final wasGranted = _permissionState == SmsPermissionState.granted;
+    final newState = await _smsService.checkPermissionStatus();
+    if (!mounted) return;
+
+    setState(() => _permissionState = newState);
+
+    final nowGranted = newState == SmsPermissionState.granted;
+    if (!wasGranted && nowGranted) {
+      // Permission was just granted via Settings — catch up immediately.
+      _smsService.startListening();
+      await _smsService.importExistingInbox();
+      await _loadFirstPage();
+      _listenForLiveTransactions();
+    }
   }
 
   void _onScroll() {
@@ -56,16 +87,28 @@ class _IngestionScreenState extends State<IngestionScreen> {
   }
 
   Future<void> _initializeData() async {
-    final granted = await _smsService.hasPermissions();
-    await _loadFirstPage();
-    if (!mounted) return;
-    setState(() {
-      _isChecking = false;
-      _permissionsGranted = granted;
-    });
-    if (granted) {
-      _smsService.startListening();
-      _listenForLiveTransactions();
+    try {
+      final state = await _smsService
+          .checkPermissionStatus()
+          .timeout(const Duration(seconds: 5), onTimeout: () => SmsPermissionState.denied);
+
+      await _loadFirstPage().timeout(const Duration(seconds: 10));
+
+      if (!mounted) return;
+      setState(() {
+        _isChecking = false;
+        _permissionState = state;
+      });
+
+      if (state == SmsPermissionState.granted) {
+        _listenForLiveTransactions();
+      }
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _isChecking = false;
+        _permissionState = SmsPermissionState.denied;
+      });
     }
   }
 
@@ -109,21 +152,42 @@ class _IngestionScreenState extends State<IngestionScreen> {
     });
   }
 
+  /// Re-request directly — only meaningful when not yet permanently
+  /// denied, since Android silently no-ops a request() call once a
+  /// permission has been permanently denied.
+  Future<void> _retryPermissionRequest() async {
+    final state = await _smsService.requestPermissions();
+    if (!mounted) return;
+    setState(() => _permissionState = state);
+    if (state == SmsPermissionState.granted) {
+      _smsService.startListening();
+      await _smsService.importExistingInbox();
+      await _loadFirstPage();
+      _listenForLiveTransactions();
+    }
+  }
+
   Future<void> _openAppSettingsForPermission() async {
     await ph.openAppSettings();
   }
 
   @override
   Widget build(BuildContext context) {
+    final granted = _permissionState == SmsPermissionState.granted;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Transactions'),
-        actions: [if (_permissionsGranted) const _LiveSyncIndicator()],
+        actions: [if (granted) const _LiveSyncIndicator()],
       ),
       body: Column(
         children: [
-          if (!_isChecking && !_permissionsGranted)
-            _PermissionDeniedBanner(onOpenSettings: _openAppSettingsForPermission),
+          if (!_isChecking && !granted)
+            _PermissionBanner(
+              permanentlyDenied: _permissionState == SmsPermissionState.permanentlyDenied,
+              onRetry: _retryPermissionRequest,
+              onOpenSettings: _openAppSettingsForPermission,
+            ),
           Expanded(
             child: _isChecking
                 ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
@@ -271,9 +335,16 @@ class _LiveSyncIndicator extends StatelessWidget {
   }
 }
 
-class _PermissionDeniedBanner extends StatelessWidget {
+class _PermissionBanner extends StatelessWidget {
+  final bool permanentlyDenied;
+  final VoidCallback onRetry;
   final VoidCallback onOpenSettings;
-  const _PermissionDeniedBanner({required this.onOpenSettings});
+
+  const _PermissionBanner({
+    required this.permanentlyDenied,
+    required this.onRetry,
+    required this.onOpenSettings,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -288,10 +359,17 @@ class _PermissionDeniedBanner extends StatelessWidget {
         children: [
           const Icon(Icons.warning_amber_rounded, color: AppColors.alert),
           const SizedBox(width: 12),
-          const Expanded(
-            child: Text('SMS access is off. Enable it in Settings to track transactions.'),
+          Expanded(
+            child: Text(
+              permanentlyDenied
+                  ? 'SMS access was denied. Enable it in Settings to track transactions.'
+                  : 'SMS access is needed to track transactions.',
+            ),
           ),
-          TextButton(onPressed: onOpenSettings, child: const Text('Open')),
+          TextButton(
+            onPressed: permanentlyDenied ? onOpenSettings : onRetry,
+            child: Text(permanentlyDenied ? 'Open' : 'Grant'),
+          ),
         ],
       ),
     );
