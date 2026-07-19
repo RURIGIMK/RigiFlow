@@ -41,6 +41,20 @@ class ParserPatterns {
     caseSensitive: false,
   );
 
+  // Savings/investment product movements (M-Shwari, Ziidi, KCB M-Shwari, etc.)
+  // Deliberately does NOT hardcode product names — captures whatever name
+  // Safaricom uses, so new products (e.g. Ziidi) are matched automatically
+  // without needing a code change every time Safaricom launches one.
+  static final RegExp mpesaTransferToSavings = RegExp(
+    r'([A-Z0-9]{10})\s+Confirmed\.\s*Ksh([\d,]+\.\d{2})\s+transferred to\s+(.+?)\s+account\s+on',
+    caseSensitive: false,
+  );
+
+  static final RegExp mpesaTransferFromSavings = RegExp(
+    r'([A-Z0-9]{10})\s+Confirmed\.\s*You have transferred\s+Ksh([\d,]+\.\d{2})\s+from your\s+(.+?)\s+account\s+on',
+    caseSensitive: false,
+  );
+
   // ---------------- BANKS ----------------
   static final RegExp bankDebit = RegExp(
     r'DEBITED\s+with\s+KES\s*([\d,]+\.\d{2})',

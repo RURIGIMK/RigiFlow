@@ -50,6 +50,34 @@ class SmsParser {
       );
     }
 
+    match = ParserPatterns.mpesaTransferFromSavings.firstMatch(body);
+    if (match != null) {
+      return TransactionModel(
+        rawSms: body,
+        amount: _parseAmount(match.group(2)!),
+        direction: TransactionDirection.moneyIn,
+        source: TransactionSource.mpesa,
+        counterparty: match.group(3)?.trim(),
+        transactionCode: match.group(1),
+        category: 'Savings',
+        timestamp: receivedAt,
+      );
+    }
+
+    match = ParserPatterns.mpesaTransferToSavings.firstMatch(body);
+    if (match != null) {
+      return TransactionModel(
+        rawSms: body,
+        amount: _parseAmount(match.group(2)!),
+        direction: TransactionDirection.moneyOut,
+        source: TransactionSource.mpesa,
+        counterparty: match.group(3)?.trim(),
+        transactionCode: match.group(1),
+        category: 'Savings',
+        timestamp: receivedAt,
+      );
+    }
+
     match = ParserPatterns.mpesaSent.firstMatch(body);
     if (match != null) {
       return TransactionModel(

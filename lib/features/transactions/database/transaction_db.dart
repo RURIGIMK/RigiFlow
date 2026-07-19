@@ -36,8 +36,14 @@ class TransactionDatabase {
       path,
       version: 2,
       onConfigure: (db) async {
-        await db.execute('PRAGMA journal_mode=WAL');
-        await db.execute('PRAGMA synchronous=NORMAL');
+        try {
+          await db.rawQuery('PRAGMA journal_mode=WAL');
+        } catch (_) {
+          // Non-critical optimization; safe to continue without it.
+        }
+        try {
+          await db.execute('PRAGMA synchronous=NORMAL');
+        } catch (_) {}
       },
       onCreate: (db, version) async {
         await db.execute('''

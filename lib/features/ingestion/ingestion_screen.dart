@@ -251,6 +251,35 @@ class _TransactionTileState extends State<_TransactionTile>
   @override
   bool get wantKeepAlive => true;
 
+  bool get _isSavings => widget.tx.category == 'Savings';
+
+  /// Savings deposits (money leaving M-Pesa into M-Shwari/Ziidi/etc.) are
+  /// shown green — it's money being saved, a positive action. Savings
+  /// withdrawals (money returning to M-Pesa) are shown red — it's money
+  /// being pulled back out to be spent. This is the inverse of the normal
+  /// in/out coloring, deliberately, per the savings-specific framing.
+  Color get _accentColor {
+    if (_isSavings) {
+      return widget.isIn ? AppColors.alert : AppColors.flow;
+    }
+    return widget.isIn ? AppColors.flow : AppColors.alert;
+  }
+
+  Color get _amountColor {
+    if (_isSavings) {
+      return widget.isIn ? AppColors.alert : AppColors.flow;
+    }
+    return widget.isIn ? AppColors.flow : AppColors.textPrimary;
+  }
+
+  String get _subtitle {
+    final dateText = widget.dateFormat.format(widget.tx.timestamp);
+    if (_isSavings) {
+      return widget.isIn ? 'Savings withdrawal • $dateText' : 'Savings deposit • $dateText';
+    }
+    return dateText;
+  }
+
   @override
   Widget build(BuildContext context) {
     super.build(context);
@@ -267,10 +296,10 @@ class _TransactionTileState extends State<_TransactionTile>
         child: Row(
           children: [
             CircleAvatar(
-              backgroundColor: (widget.isIn ? AppColors.flow : AppColors.alert).withOpacity(0.1),
+              backgroundColor: _accentColor.withOpacity(0.1),
               child: Icon(
                 widget.isIn ? Icons.arrow_downward : Icons.arrow_upward,
-                color: widget.isIn ? AppColors.flow : AppColors.alert,
+                color: _accentColor,
                 size: 18,
               ),
             ),
@@ -285,17 +314,13 @@ class _TransactionTileState extends State<_TransactionTile>
                     overflow: TextOverflow.ellipsis,
                   ),
                   const SizedBox(height: 2),
-                  Text(widget.dateFormat.format(widget.tx.timestamp),
-                      style: Theme.of(context).textTheme.bodySmall),
+                  Text(_subtitle, style: Theme.of(context).textTheme.bodySmall),
                 ],
               ),
             ),
             Text(
               '${widget.isIn ? '+' : '-'}${widget.currencyFormat.format(widget.tx.amount)}',
-              style: AppTheme.amountStyle(
-                size: 15,
-                color: widget.isIn ? AppColors.flow : AppColors.textPrimary,
-              ),
+              style: AppTheme.amountStyle(size: 15, color: _amountColor),
             ),
           ],
         ),
