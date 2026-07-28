@@ -67,6 +67,59 @@ class AuthService {
     }
   }
 
+  /// Sign up a brand-new user with email/password. Fails clearly if the
+  /// email is already registered — the UI uses that to nudge toward
+  /// "Log In" instead.
+  Future<UserCredential?> signUpWithEmail(String email, String password) async {
+    try {
+      return await _firebaseAuth.createUserWithEmailAndPassword(
+        email: email.trim(),
+        password: password,
+      );
+    } on FirebaseAuthException catch (e) {
+      throw AuthException(_friendlyEmailError(e));
+    } catch (e) {
+      throw AuthException('Sign up failed: $e');
+    }
+  }
+
+  /// Logs in an existing email/password user. Fails clearly if there's
+  /// no account with that email — the UI uses that to nudge toward
+  /// "Sign Up" instead.
+  Future<UserCredential?> logInWithEmail(String email, String password) async {
+    try {
+      return await _firebaseAuth.signInWithEmailAndPassword(
+        email: email.trim(),
+        password: password,
+      );
+    } on FirebaseAuthException catch (e) {
+      throw AuthException(_friendlyEmailError(e));
+    } catch (e) {
+      throw AuthException('Login failed: $e');
+    }
+  }
+
+  String _friendlyEmailError(FirebaseAuthException e) {
+    switch (e.code) {
+      case 'email-alreaxdy-in-use':
+        return 'An account with that email already exists — try Log In instead.';
+      case 'user-not-found':
+        return 'No account found with that email — try Sign Up instead.';
+      case 'wrong-password':
+        return 'Incorrect password for that account.';
+      case 'invalid-credential':
+      // Only reached if enumeration protection is still on somewhere —
+      // Firebase Console > Authentication > Settings > User actions.
+        return 'Incorrect email or password.';
+      case 'weak-password':
+        return 'Password should be at least 6 characters.';
+      case 'invalid-email':
+        return 'That email address looks invalid.';
+      default:
+        return e.message ?? 'Something went wrong. Please try again.';
+    }
+  }
+
   Future<void> signOut() async {
     try {
       await _googleSignIn.signOut();
