@@ -4,6 +4,12 @@ import 'firebase_options.dart';
 import 'core/theme.dart';
 import 'features/auth/auth_gate.dart';
 
+/// App-wide messenger key — lets any screen show a SnackBar that
+/// survives being navigated away from mid-call (e.g. right after a
+/// sign-in success swaps this screen out for Home).
+final GlobalKey<ScaffoldMessengerState> rootScaffoldMessengerKey =
+GlobalKey<ScaffoldMessengerState>();
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(
@@ -21,6 +27,7 @@ class RigiFlowApp extends StatelessWidget {
       title: 'RigiFlow',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.dark,
+      scaffoldMessengerKey: rootScaffoldMessengerKey,
       home: const AuthGate(),
     );
   }

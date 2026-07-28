@@ -4,6 +4,9 @@ import 'package:flutter_animate/flutter_animate.dart';
 import '../../core/theme.dart';
 import '../../shared/widgets/flow_ribbon_background.dart';
 import 'auth_service.dart';
+import '../../main.dart';
+
+
 
 enum _AuthMode { login, signUp }
 
@@ -52,25 +55,29 @@ class _LoginScreenState extends State<LoginScreen> {
   /// afterward whether it was a new account or an existing one.
   Future<void> _handleOAuthSignIn(
       Future<UserCredential?> Function() signInMethod) async {
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
+    if (mounted) {
+      setState(() {
+        _isLoading = true;
+        _errorMessage = null;
+      });
+    }
     try {
       final credential = await signInMethod();
       if (credential == null) return; // user cancelled the provider dialog
 
       final isNewUser = credential.additionalUserInfo?.isNewUser ?? false;
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(isNewUser
-                ? 'Account created — welcome to RigiFlow!'
-                : 'Welcome back!'),
-            backgroundColor: AppColors.surface,
-          ),
-        );
-      }
+      // Uses the app-root messenger, not this screen's own context —
+      // AuthGate may have already swapped this screen out for Home by
+      // the time we get here, so a locally-scoped SnackBar would
+      // silently never show. The root messenger survives that swap.
+      rootScaffoldMessengerKey.currentState?.showSnackBar(
+        SnackBar(
+          content: Text(isNewUser
+              ? 'Account created — welcome to RigiFlow!'
+              : 'Welcome back!'),
+          backgroundColor: AppColors.surface,
+        ),
+      );
     } catch (e) {
       if (mounted) setState(() => _errorMessage = e.toString());
     } finally {
