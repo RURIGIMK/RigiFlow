@@ -5,6 +5,9 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:sign_in_with_apple/sign_in_with_apple.dart';
 
+/// What HomeScreen should show right after this sign-in, consumed once.
+enum SignInGreeting { none, newAccount, returning }
+
 class AuthService {
   static final AuthService _instance = AuthService._internal();
   factory AuthService() => _instance;
@@ -13,8 +16,21 @@ class AuthService {
   final FirebaseAuth _firebaseAuth = FirebaseAuth.instance;
   final GoogleSignIn _googleSignIn = GoogleSignIn();
 
+  SignInGreeting _pendingGreeting = SignInGreeting.none;
+
   Stream<User?> get authStateChanges => _firebaseAuth.authStateChanges();
   User? get currentUser => _firebaseAuth.currentUser;
+
+  /// Reads and clears the pending greeting in one step — HomeScreen
+  /// calls this exactly once per sign-in. Because this lives only in
+  /// memory (never persisted), simply resuming an already-authenticated
+  /// session later — no fresh sign-in call — leaves it at `none`, which
+  /// is what makes the greeting correctly revert to default.
+  SignInGreeting consumePendingGreeting() {
+    final greeting = _pendingGreeting;
+    _pendingGreeting = SignInGreeting.none;
+    return greeting;
+  }
 
   Future<UserCredential?> signInWithGoogle() async {
     try {
@@ -33,7 +49,11 @@ class AuthService {
         idToken: googleAuth.idToken,
       );
 
-      return await _firebaseAuth.signInWithCredential(credential);
+      final userCredential = await _firebaseAuth.signInWithCredential(credential);
+      _pendingGreeting = (userCredential.additionalUserInfo?.isNewUser ?? false)
+          ? SignInGreeting.newAccount
+          : SignInGreeting.returning;
+      return userCredential;
     } catch (e) {
       throw AuthException(e is AuthException ? e.message : 'Google sign-in failed: $e');
     }
@@ -61,7 +81,11 @@ class AuthService {
         rawNonce: rawNonce,
       );
 
-      return await _firebaseAuth.signInWithCredential(oauthCredential);
+      final userCredential = await _firebaseAuth.signInWithCredential(oauthCredential);
+      _pendingGreeting = (userCredential.additionalUserInfo?.isNewUser ?? false)
+          ? SignInGreeting.newAccount
+          : SignInGreeting.returning;
+      return userCredential;
     } catch (e) {
       throw AuthException(e is AuthException ? e.message : 'Apple sign-in failed: $e');
     }
@@ -72,10 +96,12 @@ class AuthService {
   /// "Log In" instead.
   Future<UserCredential?> signUpWithEmail(String email, String password) async {
     try {
-      return await _firebaseAuth.createUserWithEmailAndPassword(
+      final credential = await _firebaseAuth.createUserWithEmailAndPassword(
         email: email.trim(),
         password: password,
       );
+      _pendingGreeting = SignInGreeting.newAccount;
+      return credential;
     } on FirebaseAuthException catch (e) {
       throw AuthException(_friendlyEmailError(e));
     } catch (e) {
@@ -88,10 +114,12 @@ class AuthService {
   /// "Sign Up" instead.
   Future<UserCredential?> logInWithEmail(String email, String password) async {
     try {
-      return await _firebaseAuth.signInWithEmailAndPassword(
+      final credential = await _firebaseAuth.signInWithEmailAndPassword(
         email: email.trim(),
         password: password,
       );
+      _pendingGreeting = SignInGreeting.returning;
+      return credential;
     } on FirebaseAuthException catch (e) {
       throw AuthException(_friendlyEmailError(e));
     } catch (e) {
@@ -101,15 +129,17 @@ class AuthService {
 
   String _friendlyEmailError(FirebaseAuthException e) {
     switch (e.code) {
-      case 'email-alreaxdy-in-use':
+      case 'email-already-in-use':
         return 'An account with that email already exists — try Log In instead.';
       case 'user-not-found':
         return 'No account found with that email — try Sign Up instead.';
       case 'wrong-password':
         return 'Incorrect password for that account.';
       case 'invalid-credential':
-      // Only reached if enumeration protection is still on somewhere —
-      // Firebase Console > Authentication > Settings > User actions.
+      // Only reached if Firebase's email enumeration protection is
+      // still on — Firebase Console > Authentication > Settings >
+      // User actions — which deliberately collapses the two cases
+      // above into one generic error as an anti-enumeration measure.
         return 'Incorrect email or password.';
       case 'weak-password':
         return 'Password should be at least 6 characters.';

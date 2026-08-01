@@ -14,9 +14,14 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  late final SignInGreeting _greeting;
+
   @override
   void initState() {
     super.initState();
+    // Consumed exactly once per sign-in — see AuthService for why this
+    // correctly reverts to the default greeting on a later app resume.
+    _greeting = AuthService().consumePendingGreeting();
     _initSmsListener();
   }
 
@@ -30,6 +35,17 @@ class _HomeScreenState extends State<HomeScreen> {
         smsService.startListening();
       }
     } catch (_) {}
+  }
+
+  String _greetingText(String name) {
+    switch (_greeting) {
+      case SignInGreeting.newAccount:
+        return 'Welcome to RigiFlow, $name';
+      case SignInGreeting.returning:
+        return 'Welcome back, $name';
+      case SignInGreeting.none:
+        return 'Hey, $name';
+    }
   }
 
   @override
@@ -52,7 +68,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Expanded(
-                      child: Text('Hey, $name',
+                      child: Text(_greetingText(name),
                           style: Theme.of(context).textTheme.headlineMedium,
                           overflow: TextOverflow.ellipsis)
                           .animate()
