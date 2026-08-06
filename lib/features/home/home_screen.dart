@@ -5,6 +5,7 @@ import '../../shared/widgets/flow_ribbon_background.dart';
 import '../auth/auth_service.dart';
 import '../ingestion/sms_listener_service.dart';
 import '../ingestion/ingestion_screen.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
