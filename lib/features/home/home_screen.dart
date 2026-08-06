@@ -27,6 +27,10 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _initSmsListener() async {
+    final prefs = await SharedPreferences.getInstance();
+    final role = prefs.getString('device_role');
+    if (role != 'host') return; // parent devices never touch SMS APIs
+
     final smsService = SmsListenerService();
     try {
       final state = await smsService
