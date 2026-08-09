@@ -122,6 +122,70 @@ class TransactionDatabase {
     return maps.map((m) => TransactionModel.fromMap(m)).toList();
   }
 
+  /// Filtered, paginated query — direction and/or date range are
+  /// optional; pass null to not filter on that dimension.
+  Future<List<TransactionModel>> getFilteredTransactions({
+    TransactionDirection? direction,
+    DateTime? startDate,
+    DateTime? endDate,
+    String? category,
+    DateTime? beforeTimestamp,
+    int? beforeId,
+    int limit = 30,
+  }) async {
+    final db = await database;
+    final conditions = <String>[];
+    final args = <Object?>[];
+
+    if (direction != null) {
+      conditions.add('direction = ?');
+      args.add(direction.name);
+    }
+    if (startDate != null) {
+      conditions.add('timestamp >= ?');
+      args.add(startDate.millisecondsSinceEpoch);
+    }
+    if (endDate != null) {
+      conditions.add('timestamp <= ?');
+      args.add(endDate.millisecondsSinceEpoch);
+    }
+    if (category != null) {
+      conditions.add('category = ?');
+      args.add(category);
+    }
+    if (beforeTimestamp != null && beforeId != null) {
+      conditions.add('(timestamp < ? OR (timestamp = ? AND id < ?))');
+      args.addAll([
+        beforeTimestamp.millisecondsSinceEpoch,
+        beforeTimestamp.millisecondsSinceEpoch,
+        beforeId,
+      ]);
+    }
+
+    final whereClause = conditions.isEmpty ? null : conditions.join(' AND ');
+
+    final maps = await db.query(
+      'transactions',
+      where: whereClause,
+      whereArgs: args.isEmpty ? null : args,
+      orderBy: 'timestamp DESC, id DESC',
+      limit: limit,
+    );
+    return maps.map((m) => TransactionModel.fromMap(m)).toList();
+  }
+
+  /// Updates a transaction's category — this is what a manual
+  /// correction in the UI calls.
+  Future<void> updateCategory(int transactionId, String category) async {
+    final db = await database;
+    await db.update(
+      'transactions',
+      {'category': category},
+      where: 'id = ?',
+      whereArgs: [transactionId],
+    );
+  }
+
   Future<void> close() async {
     if (_db != null && _db!.isOpen) {
       await _db!.close();

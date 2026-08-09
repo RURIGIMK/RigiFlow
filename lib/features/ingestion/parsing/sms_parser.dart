@@ -1,5 +1,6 @@
 import '../models/transaction_model.dart';
 import 'parser_patterns.dart';
+import '../../transactions/categorization/category_rules.dart';
 
 class SmsParser {
   static TransactionModel? parse({
@@ -47,6 +48,7 @@ class SmsParser {
         counterparty: match.group(3)?.trim(),
         transactionCode: match.group(1),
         timestamp: receivedAt,
+        category: CategoryRules.categorize(match.group(3)?.trim()),
       );
     }
 
@@ -88,6 +90,7 @@ class SmsParser {
         counterparty: match.group(3)?.trim(),
         transactionCode: match.group(1),
         timestamp: receivedAt,
+        category: CategoryRules.categorize(match.group(3)?.trim()),
       );
     }
 
@@ -101,6 +104,7 @@ class SmsParser {
         counterparty: match.group(3)?.trim(),
         transactionCode: match.group(1),
         timestamp: receivedAt,
+        category: CategoryRules.categorize(match.group(3)?.trim()),
       );
     }
 
@@ -114,6 +118,7 @@ class SmsParser {
         counterparty: match.group(3)?.trim(),
         transactionCode: match.group(1),
         timestamp: receivedAt,
+        category: CategoryRules.categorize(match.group(3)?.trim()),
       );
     }
 
@@ -127,6 +132,7 @@ class SmsParser {
         counterparty: 'Airtime',
         transactionCode: match.group(1),
         timestamp: receivedAt,
+        category: CategoryRules.categorize(match.group(3)?.trim()),
       );
     }
 
@@ -140,6 +146,7 @@ class SmsParser {
         counterparty: match.group(3)?.trim(),
         transactionCode: match.group(1),
         timestamp: receivedAt,
+        category: CategoryRules.categorize(match.group(3)?.trim()),
       );
     }
 
@@ -158,6 +165,7 @@ class SmsParser {
         direction: TransactionDirection.moneyIn,
         source: source,
         timestamp: receivedAt,
+        category: CategoryRules.categorize(match.group(3)?.trim()),
       );
     }
 
@@ -169,6 +177,7 @@ class SmsParser {
         direction: TransactionDirection.moneyOut,
         source: source,
         timestamp: receivedAt,
+        category: CategoryRules.categorize(match.group(3)?.trim()),
       );
     }
 
