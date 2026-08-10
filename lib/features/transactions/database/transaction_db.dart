@@ -14,8 +14,6 @@ class TransactionDatabase {
   Future<Database> get database async {
     if (_db != null && _db!.isOpen) return _db!;
 
-    // If another call is already opening the DB, wait for that instead
-    // of racing to open it twice.
     if (_initCompleter != null) return _initCompleter!.future;
 
     _initCompleter = Completer<Database>();
@@ -38,9 +36,7 @@ class TransactionDatabase {
       onConfigure: (db) async {
         try {
           await db.rawQuery('PRAGMA journal_mode=WAL');
-        } catch (_) {
-          // Non-critical optimization; safe to continue without it.
-        }
+        } catch (_) {}
         try {
           await db.execute('PRAGMA synchronous=NORMAL');
         } catch (_) {}
@@ -122,8 +118,6 @@ class TransactionDatabase {
     return maps.map((m) => TransactionModel.fromMap(m)).toList();
   }
 
-  /// Filtered, paginated query — direction and/or date range are
-  /// optional; pass null to not filter on that dimension.
   Future<List<TransactionModel>> getFilteredTransactions({
     TransactionDirection? direction,
     DateTime? startDate,
@@ -174,8 +168,6 @@ class TransactionDatabase {
     return maps.map((m) => TransactionModel.fromMap(m)).toList();
   }
 
-  /// Updates a transaction's category — this is what a manual
-  /// correction in the UI calls.
   Future<void> updateCategory(int transactionId, String category) async {
     final db = await database;
     await db.update(
@@ -184,6 +176,86 @@ class TransactionDatabase {
       where: 'id = ?',
       whereArgs: [transactionId],
     );
+  }
+
+  // ---------------- Module 4: forecasting queries ----------------
+
+  /// Daily spend totals (money out, excluding Savings — that's saving,
+  /// not spending) within a date range, keyed 'YYYY-MM-DD'. 'localtime'
+  /// keeps day boundaries aligned to the phone's actual calendar day
+  /// rather than UTC, which matters for Kenya's UTC+3 offset.
+  Future<Map<String, double>> getDailySpendTotals({
+    required DateTime start,
+    required DateTime end,
+  }) async {
+    final db = await database;
+    final rows = await db.rawQuery('''
+      SELECT strftime('%Y-%m-%d', timestamp/1000, 'unixepoch', 'localtime') as day,
+             SUM(amount) as total
+      FROM transactions
+      WHERE direction = ? AND category != ? AND timestamp >= ? AND timestamp <= ?
+      GROUP BY day
+      ORDER BY day ASC
+    ''', [
+      TransactionDirection.moneyOut.name,
+      'Savings',
+      start.millisecondsSinceEpoch,
+      end.millisecondsSinceEpoch,
+    ]);
+
+    return {
+      for (final row in rows)
+        row['day'] as String: (row['total'] as num).toDouble(),
+    };
+  }
+
+  /// Total per category within a date range, for a given direction —
+  /// defaults to money out, which is what a spend breakdown wants.
+  Future<Map<String, double>> getCategoryTotals({
+    required DateTime start,
+    required DateTime end,
+    TransactionDirection direction = TransactionDirection.moneyOut,
+  }) async {
+    final db = await database;
+    final rows = await db.rawQuery('''
+      SELECT category, SUM(amount) as total
+      FROM transactions
+      WHERE direction = ? AND timestamp >= ? AND timestamp <= ?
+      GROUP BY category
+      ORDER BY total DESC
+    ''', [direction.name, start.millisecondsSinceEpoch, end.millisecondsSinceEpoch]);
+
+    return {
+      for (final row in rows)
+        row['category'] as String: (row['total'] as num).toDouble(),
+    };
+  }
+
+  /// Average monthly spend per category over a historical window
+  /// (e.g. the 3 complete months before this one) — the baseline that
+  /// this month's spend gets compared against for anomaly detection.
+  Future<Map<String, double>> getHistoricalCategoryAverages({
+    required DateTime historyStart,
+    required DateTime historyEnd,
+    required int monthsSpanned,
+  }) async {
+    final db = await database;
+    final rows = await db.rawQuery('''
+      SELECT category, SUM(amount) as total
+      FROM transactions
+      WHERE direction = ? AND timestamp >= ? AND timestamp < ?
+      GROUP BY category
+    ''', [
+      TransactionDirection.moneyOut.name,
+      historyStart.millisecondsSinceEpoch,
+      historyEnd.millisecondsSinceEpoch,
+    ]);
+
+    final divisor = monthsSpanned > 0 ? monthsSpanned : 1;
+    return {
+      for (final row in rows)
+        row['category'] as String: (row['total'] as num).toDouble() / divisor,
+    };
   }
 
   Future<void> close() async {
