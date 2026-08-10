@@ -6,6 +6,7 @@ import '../auth/auth_service.dart';
 import '../ingestion/sms_listener_service.dart';
 import '../ingestion/ingestion_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../forecasting/forecasting_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -122,6 +123,20 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
               ).animate().fadeIn(delay: 300.ms).slideY(begin: 0.15, end: 0),
+              const SizedBox(height: 12),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const ForecastingScreen()),
+                    ),
+                    icon: const Icon(Icons.insights),
+                    label: const Text('Insights'),
+                  ),
+                ),
+              ).animate().fadeIn(delay: 350.ms).slideY(begin: 0.15, end: 0),
             ],
           ),
         ),
