@@ -35,7 +35,6 @@ class _IngestionScreenState extends State<IngestionScreen>
   bool _hasMore = true;
   bool _isFetchingMore = false;
 
-  // --- Filters (Module 3) ---
   _DirectionFilter _directionFilter = _DirectionFilter.all;
   DateTimeRange? _dateRangeFilter;
 
@@ -130,8 +129,6 @@ class _IngestionScreenState extends State<IngestionScreen>
     _transactionSubscription?.cancel();
     _transactionSubscription = _smsService.newTransactions.listen((tx) {
       if (!mounted || tx.id == null) return;
-      // Only surface it live if it matches the current filter — a
-      // filtered-out arrival will simply appear next time filters clear.
       if (_directionArg != null && tx.direction != _directionArg) return;
       setState(() {
         _transactions.insert(0, tx);
@@ -229,6 +226,11 @@ class _IngestionScreenState extends State<IngestionScreen>
     final selected = await showModalBottomSheet<String>(
       context: context,
       backgroundColor: AppColors.surface,
+      // Without this, the sheet defaults to a fixed screen-height
+      // fraction that ignores our own content sizing — that mismatch,
+      // combined with the gesture-nav bottom inset, is what caused the
+      // few-pixel overflow. isScrollControlled hands sizing to us fully.
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
@@ -418,18 +420,24 @@ class _CategoryPickerSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // A genuinely bounded height (not shrink-wrapped) is what fixes the
+    // overflow — the ListView below gets real, definite constraints via
+    // Expanded instead of trying to intrinsically size itself, which is
+    // the fragile combination that caused the few-pixel overflow.
+    final sheetHeight = MediaQuery.of(context).size.height * 0.6;
+
     return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 12),
+      top: false,
+      child: SizedBox(
+        height: sheetHeight,
         child: Column(
-          mainAxisSize: MainAxisSize.min,
           children: [
+            const SizedBox(height: 12),
             Text('Choose a category', style: Theme.of(context).textTheme.bodyLarge),
-            const SizedBox(height: 8),
-            ConstrainedBox(
-              constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.5),
+            const SizedBox(height: 4),
+            Expanded(
               child: ListView(
-                shrinkWrap: true,
+                padding: EdgeInsets.zero,
                 children: Categories.all.map((c) {
                   final selected = c.name == currentCategory;
                   return ListTile(
