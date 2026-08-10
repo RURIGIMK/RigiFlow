@@ -6,7 +6,10 @@ import 'package:permission_handler/permission_handler.dart' as ph;
 import '../../core/theme.dart';
 import '../ingestion/models/transaction_model.dart';
 import '../transactions/database/transaction_db.dart';
+import '../transactions/models/category.dart';
 import 'sms_listener_service.dart';
+
+enum _DirectionFilter { all, inOnly, outOnly }
 
 class IngestionScreen extends StatefulWidget {
   const IngestionScreen({super.key});
@@ -32,8 +35,13 @@ class _IngestionScreenState extends State<IngestionScreen>
   bool _hasMore = true;
   bool _isFetchingMore = false;
 
+  // --- Filters (Module 3) ---
+  _DirectionFilter _directionFilter = _DirectionFilter.all;
+  DateTimeRange? _dateRangeFilter;
+
   final _currencyFormat = NumberFormat.currency(symbol: 'KES ', decimalDigits: 2);
   final _dateFormat = DateFormat('d MMM, h:mm a');
+  final _rangeFormat = DateFormat('d MMM');
 
   @override
   void initState() {
@@ -51,10 +59,6 @@ class _IngestionScreenState extends State<IngestionScreen>
     super.dispose();
   }
 
-  /// Fires when the app comes back to the foreground — e.g. the user
-  /// tapped "Open Settings", granted SMS access there, and returned.
-  /// This is what makes the fix actually seamless rather than requiring
-  /// the user to force-close and reopen the app.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
@@ -71,7 +75,6 @@ class _IngestionScreenState extends State<IngestionScreen>
 
     final nowGranted = newState == SmsPermissionState.granted;
     if (!wasGranted && nowGranted) {
-      // Permission was just granted via Settings — catch up immediately.
       _smsService.startListening();
       await _smsService.importExistingInbox();
       await _loadFirstPage();
@@ -112,20 +115,38 @@ class _IngestionScreenState extends State<IngestionScreen>
     }
   }
 
+  TransactionDirection? get _directionArg {
+    switch (_directionFilter) {
+      case _DirectionFilter.inOnly:
+        return TransactionDirection.moneyIn;
+      case _DirectionFilter.outOnly:
+        return TransactionDirection.moneyOut;
+      case _DirectionFilter.all:
+        return null;
+    }
+  }
+
   void _listenForLiveTransactions() {
     _transactionSubscription?.cancel();
     _transactionSubscription = _smsService.newTransactions.listen((tx) {
-      if (mounted && tx.id != null) {
-        setState(() {
-          _transactions.insert(0, tx);
-          _newArrivalIds.add(tx.id!);
-        });
-      }
+      if (!mounted || tx.id == null) return;
+      // Only surface it live if it matches the current filter — a
+      // filtered-out arrival will simply appear next time filters clear.
+      if (_directionArg != null && tx.direction != _directionArg) return;
+      setState(() {
+        _transactions.insert(0, tx);
+        _newArrivalIds.add(tx.id!);
+      });
     });
   }
 
   Future<void> _loadFirstPage() async {
-    final txs = await _db.getTransactionsBefore(limit: _pageSize);
+    final txs = await _db.getFilteredTransactions(
+      direction: _directionArg,
+      startDate: _dateRangeFilter?.start,
+      endDate: _dateRangeFilter?.end,
+      limit: _pageSize,
+    );
     if (!mounted) return;
     setState(() {
       _transactions = txs;
@@ -138,7 +159,10 @@ class _IngestionScreenState extends State<IngestionScreen>
     setState(() => _isFetchingMore = true);
 
     final last = _transactions.last;
-    final txs = await _db.getTransactionsBefore(
+    final txs = await _db.getFilteredTransactions(
+      direction: _directionArg,
+      startDate: _dateRangeFilter?.start,
+      endDate: _dateRangeFilter?.end,
       beforeTimestamp: last.timestamp,
       beforeId: last.id,
       limit: _pageSize,
@@ -152,9 +176,39 @@ class _IngestionScreenState extends State<IngestionScreen>
     });
   }
 
-  /// Re-request directly — only meaningful when not yet permanently
-  /// denied, since Android silently no-ops a request() call once a
-  /// permission has been permanently denied.
+  void _setDirectionFilter(_DirectionFilter filter) {
+    setState(() => _directionFilter = filter);
+    _loadFirstPage();
+  }
+
+  Future<void> _pickDateRange() async {
+    final now = DateTime.now();
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(now.year - 2),
+      lastDate: now,
+      initialDateRange: _dateRangeFilter,
+      builder: (context, child) => Theme(
+        data: Theme.of(context).copyWith(
+          colorScheme: Theme.of(context).colorScheme.copyWith(
+            primary: AppColors.flow,
+            onPrimary: AppColors.ink,
+            surface: AppColors.surface,
+          ),
+        ),
+        child: child!,
+      ),
+    );
+    if (picked == null) return;
+    setState(() => _dateRangeFilter = picked);
+    _loadFirstPage();
+  }
+
+  void _clearDateRange() {
+    setState(() => _dateRangeFilter = null);
+    _loadFirstPage();
+  }
+
   Future<void> _retryPermissionRequest() async {
     final state = await _smsService.requestPermissions();
     if (!mounted) return;
@@ -169,6 +223,27 @@ class _IngestionScreenState extends State<IngestionScreen>
 
   Future<void> _openAppSettingsForPermission() async {
     await ph.openAppSettings();
+  }
+
+  Future<void> _recategorize(TransactionModel tx) async {
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => _CategoryPickerSheet(currentCategory: tx.category),
+    );
+    if (selected == null || selected == tx.category || tx.id == null) return;
+
+    await _db.updateCategory(tx.id!, selected);
+    if (!mounted) return;
+    setState(() {
+      final index = _transactions.indexWhere((t) => t.id == tx.id);
+      if (index != -1) {
+        _transactions[index] = _transactions[index].copyWith(category: selected);
+      }
+    });
   }
 
   @override
@@ -188,6 +263,15 @@ class _IngestionScreenState extends State<IngestionScreen>
               onRetry: _retryPermissionRequest,
               onOpenSettings: _openAppSettingsForPermission,
             ),
+          _FilterBar(
+            directionFilter: _directionFilter,
+            dateRangeLabel: _dateRangeFilter == null
+                ? null
+                : '${_rangeFormat.format(_dateRangeFilter!.start)} – ${_rangeFormat.format(_dateRangeFilter!.end)}',
+            onDirectionChanged: _setDirectionFilter,
+            onPickDateRange: _pickDateRange,
+            onClearDateRange: _clearDateRange,
+          ),
           Expanded(
             child: _isChecking
                 ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
@@ -216,11 +300,153 @@ class _IngestionScreenState extends State<IngestionScreen>
                   dateFormat: _dateFormat,
                   currencyFormat: _currencyFormat,
                   shouldAnimate: isNew,
+                  onTap: () => _recategorize(tx),
                 );
               },
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _FilterBar extends StatelessWidget {
+  final _DirectionFilter directionFilter;
+  final String? dateRangeLabel;
+  final void Function(_DirectionFilter) onDirectionChanged;
+  final VoidCallback onPickDateRange;
+  final VoidCallback onClearDateRange;
+
+  const _FilterBar({
+    required this.directionFilter,
+    required this.dateRangeLabel,
+    required this.onDirectionChanged,
+    required this.onPickDateRange,
+    required this.onClearDateRange,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            _chip('All', directionFilter == _DirectionFilter.all,
+                    () => onDirectionChanged(_DirectionFilter.all)),
+            const SizedBox(width: 8),
+            _chip('In', directionFilter == _DirectionFilter.inOnly,
+                    () => onDirectionChanged(_DirectionFilter.inOnly)),
+            const SizedBox(width: 8),
+            _chip('Out', directionFilter == _DirectionFilter.outOnly,
+                    () => onDirectionChanged(_DirectionFilter.outOnly)),
+            const SizedBox(width: 12),
+            ActionChip(
+              backgroundColor: AppColors.surface,
+              avatar: Icon(Icons.calendar_today,
+                  size: 15,
+                  color: dateRangeLabel == null ? AppColors.textMuted : AppColors.flow),
+              label: Text(dateRangeLabel ?? 'Date range'),
+              onPressed: onPickDateRange,
+            ),
+            if (dateRangeLabel != null) ...[
+              const SizedBox(width: 4),
+              IconButton(
+                icon: const Icon(Icons.close, size: 16, color: AppColors.textMuted),
+                onPressed: onClearDateRange,
+                visualDensity: VisualDensity.compact,
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _chip(String label, bool selected, VoidCallback onTap) {
+    return ChoiceChip(
+      label: Text(label),
+      selected: selected,
+      onSelected: (_) => onTap(),
+      backgroundColor: AppColors.surface,
+      selectedColor: AppColors.flow,
+      labelStyle: TextStyle(color: selected ? AppColors.ink : AppColors.textPrimary),
+    );
+  }
+}
+
+class _CategoryPickerSheet extends StatelessWidget {
+  final String currentCategory;
+  const _CategoryPickerSheet({required this.currentCategory});
+
+  IconData _iconFor(String name) {
+    switch (name) {
+      case 'restaurant':
+        return Icons.restaurant;
+      case 'directions_car':
+        return Icons.directions_car;
+      case 'phone_android':
+        return Icons.phone_android;
+      case 'receipt_long':
+        return Icons.receipt_long;
+      case 'home':
+        return Icons.home;
+      case 'savings':
+        return Icons.savings;
+      case 'shopping_bag':
+        return Icons.shopping_bag;
+      case 'local_hospital':
+        return Icons.local_hospital;
+      case 'movie':
+        return Icons.movie;
+      case 'school':
+        return Icons.school;
+      case 'people':
+        return Icons.people;
+      case 'payments':
+        return Icons.payments;
+      case 'account_balance':
+        return Icons.account_balance;
+      case 'toll':
+        return Icons.toll;
+      default:
+        return Icons.help_outline;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('Choose a category', style: Theme.of(context).textTheme.bodyLarge),
+            const SizedBox(height: 8),
+            ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.5),
+              child: ListView(
+                shrinkWrap: true,
+                children: Categories.all.map((c) {
+                  final selected = c.name == currentCategory;
+                  return ListTile(
+                    leading: Icon(_iconFor(c.icon),
+                        color: selected ? AppColors.flow : AppColors.textMuted),
+                    title: Text(c.name,
+                        style: TextStyle(
+                            color: selected ? AppColors.flow : AppColors.textPrimary,
+                            fontWeight: selected ? FontWeight.bold : FontWeight.normal)),
+                    trailing: selected ? const Icon(Icons.check, color: AppColors.flow) : null,
+                    onTap: () => Navigator.of(context).pop(c.name),
+                  );
+                }).toList(),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -232,6 +458,7 @@ class _TransactionTile extends StatefulWidget {
   final DateFormat dateFormat;
   final NumberFormat currencyFormat;
   final bool shouldAnimate;
+  final VoidCallback onTap;
 
   const _TransactionTile({
     super.key,
@@ -239,6 +466,7 @@ class _TransactionTile extends StatefulWidget {
     required this.isIn,
     required this.dateFormat,
     required this.currencyFormat,
+    required this.onTap,
     this.shouldAnimate = false,
   });
 
@@ -253,11 +481,6 @@ class _TransactionTileState extends State<_TransactionTile>
 
   bool get _isSavings => widget.tx.category == 'Savings';
 
-  /// Savings deposits (money leaving M-Pesa into M-Shwari/Ziidi/etc.) are
-  /// shown green — it's money being saved, a positive action. Savings
-  /// withdrawals (money returning to M-Pesa) are shown red — it's money
-  /// being pulled back out to be spent. This is the inverse of the normal
-  /// in/out coloring, deliberately, per the savings-specific framing.
   Color get _accentColor {
     if (_isSavings) {
       return widget.isIn ? AppColors.alert : AppColors.flow;
@@ -277,7 +500,7 @@ class _TransactionTileState extends State<_TransactionTile>
     if (_isSavings) {
       return widget.isIn ? 'Savings withdrawal • $dateText' : 'Savings deposit • $dateText';
     }
-    return dateText;
+    return '${widget.tx.category} • $dateText';
   }
 
   @override
@@ -285,44 +508,50 @@ class _TransactionTileState extends State<_TransactionTile>
     super.build(context);
 
     final content = RepaintBoundary(
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 12),
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: AppColors.surface,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: AppColors.textMuted.withOpacity(0.05)),
-        ),
-        child: Row(
-          children: [
-            CircleAvatar(
-              backgroundColor: _accentColor.withOpacity(0.1),
-              child: Icon(
-                widget.isIn ? Icons.arrow_downward : Icons.arrow_upward,
-                color: _accentColor,
-                size: 18,
+      child: InkWell(
+        onTap: widget.onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: AppColors.textMuted.withOpacity(0.05)),
+          ),
+          child: Row(
+            children: [
+              CircleAvatar(
+                backgroundColor: _accentColor.withOpacity(0.1),
+                child: Icon(
+                  widget.isIn ? Icons.arrow_downward : Icons.arrow_upward,
+                  color: _accentColor,
+                  size: 18,
+                ),
               ),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    widget.tx.counterparty ?? widget.tx.source.name.toUpperCase(),
-                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 2),
-                  Text(_subtitle, style: Theme.of(context).textTheme.bodySmall),
-                ],
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      widget.tx.counterparty ?? widget.tx.source.name.toUpperCase(),
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(_subtitle,
+                        style: Theme.of(context).textTheme.bodySmall,
+                        overflow: TextOverflow.ellipsis),
+                  ],
+                ),
               ),
-            ),
-            Text(
-              '${widget.isIn ? '+' : '-'}${widget.currencyFormat.format(widget.tx.amount)}',
-              style: AppTheme.amountStyle(size: 15, color: _amountColor),
-            ),
-          ],
+              Text(
+                '${widget.isIn ? '+' : '-'}${widget.currencyFormat.format(widget.tx.amount)}',
+                style: AppTheme.amountStyle(size: 15, color: _amountColor),
+              ),
+            ],
+          ),
         ),
       ),
     );
