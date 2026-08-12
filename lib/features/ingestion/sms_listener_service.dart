@@ -30,9 +30,6 @@ class ImportProgress {
   double get fraction => total == 0 ? 0 : scanned / total;
 }
 
-/// Richer than a bool so the UI can tell "not yet asked" apart from
-/// "denied but askable again" apart from "permanently denied — must
-/// go to Settings" (Android only allows re-asking twice before this).
 enum SmsPermissionState { granted, denied, permanentlyDenied }
 
 class SmsListenerService {
@@ -45,23 +42,21 @@ class SmsListenerService {
   bool _isListening = false;
   bool _isImporting = false;
 
-  static const int _maxMessagesToScan = 3000;
-  static const Duration _importTimeBudget = Duration(seconds: 25);
+  // Raised from the original 30-day-window sizing (3000 / 25s) to
+  // accommodate scanning a full multi-year inbox now that there's no
+  // date cutoff — regex scanning itself is fast (the earlier hang was
+  // a database bug, already fixed), so this is a generous safety net,
+  // not an expected bottleneck.
+  static const int _maxMessagesToScan = 20000;
+  static const Duration _importTimeBudget = Duration(seconds: 90);
 
   Stream<TransactionModel> get newTransactions => _transactionStreamController.stream;
 
-  /// Requests via permission_handler — the reliable source of truth.
-  /// telephony is used below purely for reading/listening to SMS, which
-  /// works fine once the OS permission is granted through any path.
   Future<SmsPermissionState> requestPermissions() async {
     final status = await ph.Permission.sms.request();
     return _mapStatus(status);
   }
 
-  /// Deliberately NOT cached — always reads Android's real, current
-  /// permission state. This is the fix for the stale-cache bug: a
-  /// permission granted later via system Settings is picked up
-  /// correctly the very next time this is called.
   Future<SmsPermissionState> checkPermissionStatus() async {
     final status = await ph.Permission.sms.status;
     return _mapStatus(status);
@@ -102,6 +97,11 @@ class SmsListenerService {
     );
   }
 
+  /// Imports the FULL SMS inbox history available on the device — no
+  /// date cutoff. How far back this actually reaches is bounded by
+  /// whatever the phone's own SMS app has retained (some phones/OEMs
+  /// periodically prune very old SMS for storage) — not something the
+  /// app can control beyond reading whatever's still there.
   Future<int> importExistingInbox({
     void Function(ImportProgress progress)? onProgress,
   }) async {
@@ -109,13 +109,8 @@ class SmsListenerService {
     _isImporting = true;
 
     try {
-      final now = DateTime.now();
-      final startDate = DateTime(now.year, now.month - 1, 1);
-
       final messages = await _telephony.getInboxSms(
         columns: [SmsColumn.ADDRESS, SmsColumn.BODY, SmsColumn.DATE],
-        filter: SmsFilter.where(SmsColumn.DATE)
-            .greaterThanOrEqualTo(startDate.millisecondsSinceEpoch.toString()),
         sortOrder: [OrderBy(SmsColumn.DATE, sort: Sort.DESC)],
       );
 
@@ -157,7 +152,7 @@ class SmsListenerService {
           continue;
         }
 
-        if (scanned % 15 == 0) {
+        if (scanned % 25 == 0) {
           onProgress?.call(ImportProgress(scanned: scanned, total: total, matched: matched));
           await Future.delayed(Duration.zero);
         }

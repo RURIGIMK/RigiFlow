@@ -1,33 +1,52 @@
 import '../models/category.dart';
 
-/// Maps a counterparty/merchant name to a category by keyword match.
-/// Runs once at parse time; the user's manual corrections (stored per
-/// transaction_code in the DB) always take precedence over this on
-/// re-categorization.
 class CategoryRules {
   static const Map<String, List<String>> _keywordMap = {
     'Food & Groceries': [
-      'NAIVAS', 'CARREFOUR', 'QUICKMART', 'CHANDARANA', 'TUSKYS',
-      'SUPERMARKET', 'BUTCHERY', 'RESTAURANT', 'CAFE', 'HOTEL',
-      'KFC', 'JAVA', 'PIZZA', 'FOOD',
+      'NAIVAS', 'CARREFOUR', 'QUICKMART', 'CHANDARANA', 'TUSKYS', 'CLEANSHELF',
+      'SUPERMARKET', 'BUTCHERY', 'RESTAURANT', 'CAFE', 'HOTEL', 'EATERY',
+      'KFC', 'JAVA', 'PIZZA', 'FOOD', 'BAKERY', 'GROCER', 'MART', 'KITCHEN',
+      'DOMINOS', 'BURGER', 'CHICKEN',
     ],
     'Transport': [
       'UBER', 'BOLT', 'LITTLE CAB', 'MATATU', 'SGR', 'SHELL', 'TOTAL',
-      'RUBIS', 'PETROL', 'FUEL', 'PARKING',
+      'RUBIS', 'PETROL', 'FUEL', 'PARKING', 'GARAGE', 'AUTO', 'SPARES',
+      'OLA', 'FARE', 'TAXI',
     ],
-    'Airtime & Data': ['AIRTIME', 'SAFARICOM DATA', 'BUNDLES'],
+    'Airtime & Data': ['AIRTIME', 'SAFARICOM DATA', 'BUNDLES', 'TOPUP', 'TOP UP'],
     'Bills & Utilities': [
       'KPLC', 'KENYA POWER', 'NAIROBI WATER', 'DSTV', 'GOTV', 'ZUKU',
-      'JAMII TELECOM', 'STARTIMES',
+      'JAMII TELECOM', 'STARTIMES', 'ELECTRICITY', 'WATER', 'WASREB',
+      'INTERNET', 'WIFI', 'FIBER',
     ],
-    'Savings': ['M-SHWARI', 'MSHWARI', 'ZIIDI', 'KCB M-PESA', 'MALI', 'FULIZA'],
-    'Health': ['HOSPITAL', 'CLINIC', 'PHARMACY', 'CHEMIST', 'NHIF', 'SHA'],
-    'Education': ['SCHOOL', 'UNIVERSITY', 'COLLEGE', 'HELB', 'FEES'],
-    'Loans & Credit': ['LOAN', 'CREDIT', 'BRANCH', 'TALA', 'ZENKA'],
+    'Savings': [
+      'M-SHWARI', 'MSHWARI', 'ZIIDI', 'KCB M-PESA', 'MALI', 'FULIZA',
+      'SACCO', 'MMF', 'MONEY MARKET',
+    ],
+    'Health': [
+      'HOSPITAL', 'CLINIC', 'PHARMACY', 'CHEMIST', 'NHIF', 'SHA',
+      'MEDICAL', 'DOCTOR', 'DENTAL', 'LAB',
+    ],
+    'Education': [
+      'SCHOOL', 'UNIVERSITY', 'COLLEGE', 'HELB', 'FEES', 'ACADEMY',
+      'TUITION', 'BOOKS',
+    ],
+    'Loans & Credit': [
+      'LOAN', 'CREDIT', 'BRANCH', 'TALA', 'ZENKA', 'HUSTLER FUND',
+      'MSHIKAMANO', 'OKASH', 'BRIDGE',
+    ],
+    'Shopping': [
+      'JUMIA', 'KILIMALL', 'MASOKO', 'SHOP', 'STORE', 'BOUTIQUE',
+      'FASHION', 'ELECTRONICS', 'HARDWARE',
+    ],
+    'Entertainment': [
+      'CINEMA', 'MOVIE', 'NETFLIX', 'SHOWMAX', 'SPOTIFY', 'BETTING',
+      'SPORTPESA', 'BETIKA', 'CLUB', 'BAR', 'LOUNGE',
+    ],
+    'Rent': ['RENT', 'LANDLORD', 'HOUSING', 'ESTATE'],
+    'Fees & Charges': ['CHARGE', 'FEE', 'COMMISSION', 'TAX', 'KRA'],
   };
 
-  /// Returns the best-guess category for a counterparty name, or
-  /// Uncategorized if nothing matches.
   static String categorize(String? counterparty) {
     if (counterparty == null || counterparty.trim().isEmpty) {
       return Categories.uncategorized;
