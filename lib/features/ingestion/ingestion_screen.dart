@@ -178,13 +178,24 @@ class _IngestionScreenState extends State<IngestionScreen>
     _loadFirstPage();
   }
 
+  /// Two native single-date pickers in sequence, rather than Flutter's
+  /// combined range picker — that widget's "type it manually" mode needs
+  /// a keyboard with a "/" key to separate day/month/year, which a
+  /// numeric-only keyboard simply can't produce. This sidesteps that
+  /// entirely: fully tap-based, and each step includes a year quick-jump
+  /// (tap the year at the top of the calendar to jump straight to it),
+  /// so reaching a date years back doesn't mean paging month by month.
   Future<void> _pickDateRange() async {
     final now = DateTime.now();
-    final picked = await showDateRangePicker(
+    final earliestSelectable = DateTime(now.year - 15);
+
+    final startDate = await showDatePicker(
       context: context,
-      firstDate: DateTime(now.year - 2),
+      helpText: 'Select start date',
+      initialDate: _dateRangeFilter?.start ?? now,
+      firstDate: earliestSelectable,
       lastDate: now,
-      initialDateRange: _dateRangeFilter,
+      initialEntryMode: DatePickerEntryMode.calendar,
       builder: (context, child) => Theme(
         data: Theme.of(context).copyWith(
           colorScheme: Theme.of(context).colorScheme.copyWith(
@@ -196,8 +207,29 @@ class _IngestionScreenState extends State<IngestionScreen>
         child: child!,
       ),
     );
-    if (picked == null) return;
-    setState(() => _dateRangeFilter = picked);
+    if (startDate == null || !mounted) return;
+
+    final endDate = await showDatePicker(
+      context: context,
+      helpText: 'Select end date',
+      initialDate: _dateRangeFilter?.end ?? now,
+      firstDate: startDate,
+      lastDate: now,
+      initialEntryMode: DatePickerEntryMode.calendar,
+      builder: (context, child) => Theme(
+        data: Theme.of(context).copyWith(
+          colorScheme: Theme.of(context).colorScheme.copyWith(
+            primary: AppColors.flow,
+            onPrimary: AppColors.ink,
+            surface: AppColors.surface,
+          ),
+        ),
+        child: child!,
+      ),
+    );
+    if (endDate == null || !mounted) return;
+
+    setState(() => _dateRangeFilter = DateTimeRange(start: startDate, end: endDate));
     _loadFirstPage();
   }
 
