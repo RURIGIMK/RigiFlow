@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import '../../ingestion/models/transaction_model.dart';
+import '../../forecasting/models/forecast_result.dart';
 
 class TransactionDatabase {
   static final TransactionDatabase _instance = TransactionDatabase._internal();
@@ -256,6 +257,34 @@ class TransactionDatabase {
       for (final row in rows)
         row['category'] as String: (row['total'] as num).toDouble() / divisor,
     };
+  }
+
+  /// One row per calendar month with any activity — income and spend
+  /// (spend excludes Savings deposits, matching the rest of the
+  /// forecasting layer) — the data behind the Monthly Reports screen
+  /// and the backtesting engine's historical months.
+  Future<List<MonthlySummary>> getMonthlySummaries() async {
+    final db = await database;
+    final rows = await db.rawQuery('''
+      SELECT
+        strftime('%Y-%m', timestamp/1000, 'unixepoch', 'localtime') as month,
+        SUM(CASE WHEN direction = 'moneyIn' THEN amount ELSE 0 END) as total_in,
+        SUM(CASE WHEN direction = 'moneyOut' AND category != 'Savings' THEN amount ELSE 0 END) as total_out
+      FROM transactions
+      GROUP BY month
+      ORDER BY month ASC
+    ''');
+
+    return rows.map((row) {
+      final monthKey = row['month'] as String;
+      final parts = monthKey.split('-');
+      return MonthlySummary(
+        monthKey: monthKey,
+        monthStart: DateTime(int.parse(parts[0]), int.parse(parts[1]), 1),
+        totalIn: (row['total_in'] as num).toDouble(),
+        totalOut: (row['total_out'] as num).toDouble(),
+      );
+    }).toList();
   }
 
   Future<void> close() async {

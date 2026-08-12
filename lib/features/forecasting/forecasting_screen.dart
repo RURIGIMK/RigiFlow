@@ -3,10 +3,10 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:intl/intl.dart';
 import '../../core/theme.dart';
 import '../../shared/widgets/flow_ribbon_background.dart';
-import '../ingestion/models/transaction_model.dart';
 import '../transactions/database/transaction_db.dart';
 import 'forecasting_engine.dart';
 import 'models/forecast_result.dart';
+import 'monthly_reports_screen.dart';
 
 class ForecastingScreen extends StatefulWidget {
   const ForecastingScreen({super.key});
@@ -36,22 +36,43 @@ class _ForecastingScreenState extends State<ForecastingScreen> {
     final daysInMonth = DateTime(now.year, now.month + 1, 0).day;
     final daysElapsed = now.day;
 
-    // Historical window: the 3 complete months before this one.
-    final historyStart = DateTime(now.year, now.month - 3, 1);
-    final historyEnd = monthStart;
-
-    final dailyTotals = await _db.getDailySpendTotals(start: monthStart, end: now);
-    final categoryTotals = await _db.getCategoryTotals(start: monthStart, end: now);
-    final historicalAverages = await _db.getHistoricalCategoryAverages(
-      historyStart: historyStart,
-      historyEnd: historyEnd,
-      monthsSpanned: 3,
+    final currentDailyMap = await _db.getDailySpendTotals(start: monthStart, end: now);
+    final currentMonthDaily = ForecastingEngine.orderedDailyList(
+      dailyTotals: currentDailyMap,
+      start: monthStart,
+      days: daysElapsed,
     );
 
-    final projection = ForecastingEngine.projectMonthEnd(
-      dailyTotals: dailyTotals,
-      daysElapsed: daysElapsed,
+    // Up to the last 6 complete calendar months, each as an ordered
+    // daily list — the backtesting engine's training ground.
+    final historicalMonths = <List<double>>[];
+    for (int i = 1; i <= 6; i++) {
+      final histMonthStart = DateTime(now.year, now.month - i, 1);
+      final histDaysInMonth = DateTime(now.year, now.month - i + 1, 0).day;
+      final histMonthEnd = DateTime(now.year, now.month - i + 1, 0, 23, 59, 59);
+
+      final histDailyMap = await _db.getDailySpendTotals(start: histMonthStart, end: histMonthEnd);
+      final histOrdered = ForecastingEngine.orderedDailyList(
+        dailyTotals: histDailyMap,
+        start: histMonthStart,
+        days: histDaysInMonth,
+      );
+      if (histOrdered.any((v) => v > 0)) historicalMonths.add(histOrdered);
+    }
+
+    final projection = ForecastingEngine.backtestAndProject(
+      historicalMonths: historicalMonths,
+      currentMonthDaily: currentMonthDaily,
       daysInMonth: daysInMonth,
+    );
+
+    final categoryTotals = await _db.getCategoryTotals(start: monthStart, end: now);
+
+    final historyStart = DateTime(now.year, now.month - 3, 1);
+    final historicalAverages = await _db.getHistoricalCategoryAverages(
+      historyStart: historyStart,
+      historyEnd: monthStart,
+      monthsSpanned: 3,
     );
 
     final anomalies = ForecastingEngine.detectAnomalies(
@@ -71,7 +92,18 @@ class _ForecastingScreenState extends State<ForecastingScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Insights')),
+      appBar: AppBar(
+        title: const Text('Insights'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.calendar_view_month),
+            tooltip: 'Monthly Reports',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const MonthlyReportsScreen()),
+            ),
+          ),
+        ],
+      ),
       body: FlowRibbonBackground(
         child: _loading
             ? const Center(child: CircularProgressIndicator(color: AppColors.flow))
@@ -126,9 +158,8 @@ class _ProjectionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final progress = projection.daysInMonth == 0
-        ? 0.0
-        : projection.daysElapsed / projection.daysInMonth;
+    final progress =
+    projection.daysInMonth == 0 ? 0.0 : projection.daysElapsed / projection.daysInMonth;
 
     return Container(
       width: double.infinity,
@@ -150,6 +181,20 @@ class _ProjectionCard extends StatelessWidget {
           Text(
             '${currencyFormat.format(projection.confidenceLower)} – ${currencyFormat.format(projection.confidenceUpper)}',
             style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: AppColors.flow.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              projection.backtestErrorPercent != null
+                  ? '${projection.method.label} model • ~${projection.backtestErrorPercent!.toStringAsFixed(0)}% avg backtest error'
+                  : '${projection.method.label} model • not enough history to backtest yet',
+              style: const TextStyle(fontSize: 11, color: AppColors.flow),
+            ),
           ),
           const SizedBox(height: 16),
           ClipRRect(
