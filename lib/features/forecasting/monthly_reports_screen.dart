@@ -31,7 +31,7 @@ class _MonthlyReportsScreenState extends State<MonthlyReportsScreen> {
     final summaries = await _db.getMonthlySummaries();
     if (!mounted) return;
     setState(() {
-      _summaries = summaries.reversed.toList(); // most recent first
+      _summaries = summaries.reversed.toList();
       _loading = false;
     });
   }
@@ -48,6 +48,13 @@ class _MonthlyReportsScreenState extends State<MonthlyReportsScreen> {
           child: Text('No monthly data yet.',
               style: Theme.of(context).textTheme.bodyMedium),
         )
+        // Animate the list as a single unit, once, on initial
+        // load — not per-tile inside itemBuilder. ListView.builder
+        // recycles off-screen tiles as you scroll (normal, and
+        // fine for static content), but a per-tile entrance
+        // animation would restart from invisible every time a
+        // recycled tile rebuilds, which is what made items look
+        // like they were vanishing and reloading while scrolling.
             : ListView.builder(
           padding: const EdgeInsets.all(16),
           itemCount: _summaries.length,
@@ -55,6 +62,7 @@ class _MonthlyReportsScreenState extends State<MonthlyReportsScreen> {
             final s = _summaries[index];
             final netPositive = s.net >= 0;
             return Container(
+              key: ValueKey(s.monthKey),
               margin: const EdgeInsets.only(bottom: 12),
               padding: const EdgeInsets.all(18),
               decoration: BoxDecoration(
@@ -82,9 +90,9 @@ class _MonthlyReportsScreenState extends State<MonthlyReportsScreen> {
                   ),
                 ],
               ),
-            ).animate().fadeIn(delay: (index * 40).ms);
+            );
           },
-        ),
+        ).animate().fadeIn(duration: 350.ms),
       ),
     );
   }
