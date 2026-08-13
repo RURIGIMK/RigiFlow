@@ -178,13 +178,6 @@ class _IngestionScreenState extends State<IngestionScreen>
     _loadFirstPage();
   }
 
-  /// Two native single-date pickers in sequence, rather than Flutter's
-  /// combined range picker — that widget's "type it manually" mode needs
-  /// a keyboard with a "/" key to separate day/month/year, which a
-  /// numeric-only keyboard simply can't produce. This sidesteps that
-  /// entirely: fully tap-based, and each step includes a year quick-jump
-  /// (tap the year at the top of the calendar to jump straight to it),
-  /// so reaching a date years back doesn't mean paging month by month.
   Future<void> _pickDateRange() async {
     final now = DateTime.now();
     final earliestSelectable = DateTime(now.year - 15);
@@ -254,28 +247,29 @@ class _IngestionScreenState extends State<IngestionScreen>
     await ph.openAppSettings();
   }
 
-  Future<void> _recategorize(TransactionModel tx) async {
-    final selected = await showModalBottomSheet<String>(
+  /// Opens the full transaction detail sheet. If the person changes the
+  /// category from within it (nested category-picker sheet), the detail
+  /// sheet pops back here with the new category name, which we persist
+  /// and reflect in the list — same end effect as the old direct
+  /// category-picker tap, just reached via the detail view now.
+  Future<void> _openTransactionDetail(TransactionModel tx) async {
+    final newCategory = await showModalBottomSheet<String>(
       context: context,
       backgroundColor: AppColors.surface,
-      // Without this, the sheet defaults to a fixed screen-height
-      // fraction that ignores our own content sizing — that mismatch,
-      // combined with the gesture-nav bottom inset, is what caused the
-      // few-pixel overflow. isScrollControlled hands sizing to us fully.
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (context) => _CategoryPickerSheet(currentCategory: tx.category),
+      builder: (context) => _TransactionDetailSheet(tx: tx, currencyFormat: _currencyFormat),
     );
-    if (selected == null || selected == tx.category || tx.id == null) return;
+    if (newCategory == null || newCategory == tx.category || tx.id == null) return;
 
-    await _db.updateCategory(tx.id!, selected);
+    await _db.updateCategory(tx.id!, newCategory);
     if (!mounted) return;
     setState(() {
       final index = _transactions.indexWhere((t) => t.id == tx.id);
       if (index != -1) {
-        _transactions[index] = _transactions[index].copyWith(category: selected);
+        _transactions[index] = _transactions[index].copyWith(category: newCategory);
       }
     });
   }
@@ -334,7 +328,7 @@ class _IngestionScreenState extends State<IngestionScreen>
                   dateFormat: _dateFormat,
                   currencyFormat: _currencyFormat,
                   shouldAnimate: isNew,
-                  onTap: () => _recategorize(tx),
+                  onTap: () => _openTransactionDetail(tx),
                 );
               },
             ),
@@ -452,10 +446,6 @@ class _CategoryPickerSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // A genuinely bounded height (not shrink-wrapped) is what fixes the
-    // overflow — the ListView below gets real, definite constraints via
-    // Expanded instead of trying to intrinsically size itself, which is
-    // the fragile combination that caused the few-pixel overflow.
     final sheetHeight = MediaQuery.of(context).size.height * 0.6;
 
     return SafeArea(
@@ -483,6 +473,121 @@ class _CategoryPickerSheet extends StatelessWidget {
                     onTap: () => Navigator.of(context).pop(c.name),
                   );
                 }).toList(),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Full transaction detail — deliberately built from the structured
+/// fields we actually store, never the raw SMS text. That's what keeps
+/// balance out automatically: we never parse or store it in the first
+/// place, so there's nothing to redact. Wrapped in a scroll view so it
+/// never overflows regardless of screen height or accessibility text
+/// scaling.
+class _TransactionDetailSheet extends StatefulWidget {
+  final TransactionModel tx;
+  final NumberFormat currencyFormat;
+  const _TransactionDetailSheet({required this.tx, required this.currencyFormat});
+
+  @override
+  State<_TransactionDetailSheet> createState() => _TransactionDetailSheetState();
+}
+
+class _TransactionDetailSheetState extends State<_TransactionDetailSheet> {
+  late TransactionModel _tx;
+
+  @override
+  void initState() {
+    super.initState();
+    _tx = widget.tx;
+  }
+
+  Future<void> _changeCategory() async {
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => _CategoryPickerSheet(currentCategory: _tx.category),
+    );
+    if (selected == null || selected == _tx.category || !mounted) return;
+    Navigator.of(context).pop(selected); // hand the new category to the caller
+  }
+
+  Widget _row(BuildContext context, String label, String value, {Color? valueColor}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(width: 96, child: Text(label, style: Theme.of(context).textTheme.bodySmall)),
+          Expanded(
+            child: Text(value,
+                style: TextStyle(color: valueColor ?? AppColors.textPrimary, fontWeight: FontWeight.w500)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isIn = _tx.direction == TransactionDirection.moneyIn;
+    final dateTimeFormat = DateFormat('EEEE, d MMMM yyyy • h:mm a');
+
+    return SafeArea(
+      top: false,
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                    color: AppColors.textMuted.withOpacity(0.3), borderRadius: BorderRadius.circular(4)),
+              ),
+            ),
+            const SizedBox(height: 20),
+            Text('Transaction Details', style: Theme.of(context).textTheme.headlineMedium),
+            const SizedBox(height: 6),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Text(
+                '${isIn ? '+' : '-'}${widget.currencyFormat.format(_tx.amount)}',
+                style: AppTheme.amountStyle(size: 26, color: isIn ? AppColors.flow : AppColors.alert),
+              ),
+            ),
+            const Divider(height: 32, color: AppColors.textMuted),
+            _row(context, 'To/From', _tx.counterparty ?? _tx.source.name.toUpperCase()),
+            _row(context, 'Direction', isIn ? 'Money In' : 'Money Out'),
+            _row(context, 'Date', dateTimeFormat.format(_tx.timestamp)),
+            _row(context, 'Source', _tx.source.name.toUpperCase()),
+            if (_tx.transactionCode != null) _row(context, 'Reference', _tx.transactionCode!),
+            InkWell(
+              onTap: _changeCategory,
+              borderRadius: BorderRadius.circular(12),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                child: Row(
+                  children: [
+                    SizedBox(width: 96, child: Text('Category', style: Theme.of(context).textTheme.bodySmall)),
+                    Expanded(
+                      child: Text(_tx.category,
+                          style: const TextStyle(color: AppColors.flow, fontWeight: FontWeight.w600)),
+                    ),
+                    const Icon(Icons.chevron_right, color: AppColors.textMuted, size: 18),
+                  ],
+                ),
               ),
             ),
           ],
@@ -535,12 +640,11 @@ class _TransactionTileState extends State<_TransactionTile>
     return widget.isIn ? AppColors.flow : AppColors.textPrimary;
   }
 
-  String get _subtitle {
-    final dateText = widget.dateFormat.format(widget.tx.timestamp);
+  String get _categoryLine {
     if (_isSavings) {
-      return widget.isIn ? 'Savings withdrawal • $dateText' : 'Savings deposit • $dateText';
+      return widget.isIn ? 'Savings withdrawal' : 'Savings deposit';
     }
-    return '${widget.tx.category} • $dateText';
+    return widget.tx.category;
   }
 
   @override
@@ -560,6 +664,7 @@ class _TransactionTileState extends State<_TransactionTile>
             border: Border.all(color: AppColors.textMuted.withOpacity(0.05)),
           ),
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               CircleAvatar(
                 backgroundColor: _accentColor.withOpacity(0.1),
@@ -570,6 +675,9 @@ class _TransactionTileState extends State<_TransactionTile>
                 ),
               ),
               const SizedBox(width: 16),
+              // Full name, up to 2 lines — no longer truncated to one
+              // line — then category and date as their own separate
+              // lines, per the requested 3-line layout.
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -577,18 +685,35 @@ class _TransactionTileState extends State<_TransactionTile>
                     Text(
                       widget.tx.counterparty ?? widget.tx.source.name.toUpperCase(),
                       style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
-                    const SizedBox(height: 2),
-                    Text(_subtitle,
+                    const SizedBox(height: 4),
+                    Text(_categoryLine,
                         style: Theme.of(context).textTheme.bodySmall,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis),
+                    const SizedBox(height: 2),
+                    Text(widget.dateFormat.format(widget.tx.timestamp),
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: AppColors.textMuted.withOpacity(0.7)),
+                        maxLines: 1,
                         overflow: TextOverflow.ellipsis),
                   ],
                 ),
               ),
-              Text(
-                '${widget.isIn ? '+' : '-'}${widget.currencyFormat.format(widget.tx.amount)}',
-                style: AppTheme.amountStyle(size: 15, color: _amountColor),
+              const SizedBox(width: 8),
+              // Shrinks rather than overflows on narrow screens or with
+              // unusually large amounts.
+              Flexible(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerRight,
+                  child: Text(
+                    '${widget.isIn ? '+' : '-'}${widget.currencyFormat.format(widget.tx.amount)}',
+                    style: AppTheme.amountStyle(size: 15, color: _amountColor),
+                  ),
+                ),
               ),
             ],
           ),

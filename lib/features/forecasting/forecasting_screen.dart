@@ -173,9 +173,13 @@ class _ProjectionCard extends StatelessWidget {
         children: [
           Text('Projected spend this month', style: Theme.of(context).textTheme.bodyMedium),
           const SizedBox(height: 8),
-          Text(
-            currencyFormat.format(projection.projectedTotal),
-            style: AppTheme.amountStyle(size: 32, color: AppColors.flow),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              currencyFormat.format(projection.projectedTotal),
+              style: AppTheme.amountStyle(size: 32, color: AppColors.flow),
+            ),
           ),
           const SizedBox(height: 4),
           Text(

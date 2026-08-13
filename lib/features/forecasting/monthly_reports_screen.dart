@@ -48,13 +48,6 @@ class _MonthlyReportsScreenState extends State<MonthlyReportsScreen> {
           child: Text('No monthly data yet.',
               style: Theme.of(context).textTheme.bodyMedium),
         )
-        // Animate the list as a single unit, once, on initial
-        // load — not per-tile inside itemBuilder. ListView.builder
-        // recycles off-screen tiles as you scroll (normal, and
-        // fine for static content), but a per-tile entrance
-        // animation would restart from invisible every time a
-        // recycled tile rebuilds, which is what made items look
-        // like they were vanishing and reloading while scrolling.
             : ListView.builder(
           padding: const EdgeInsets.all(16),
           itemCount: _summaries.length,
@@ -76,16 +69,18 @@ class _MonthlyReportsScreenState extends State<MonthlyReportsScreen> {
                       style: const TextStyle(
                           fontWeight: FontWeight.bold, fontSize: 16)),
                   const SizedBox(height: 12),
+                  // Equal-width columns is what actually fixes the
+                  // misalignment — spaceBetween previously let each
+                  // column's own content width push the numbers
+                  // out of a shared grid.
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      _statColumn(context, 'In', s.totalIn, AppColors.flow),
-                      _statColumn(context, 'Out', s.totalOut, AppColors.alert),
-                      _statColumn(
-                          context,
-                          'Net',
-                          s.net,
-                          netPositive ? AppColors.flow : AppColors.alert),
+                      Expanded(child: _statColumn(context, 'In', s.totalIn, AppColors.flow)),
+                      Expanded(child: _statColumn(context, 'Out', s.totalOut, AppColors.alert)),
+                      Expanded(
+                        child: _statColumn(context, 'Net', s.net,
+                            netPositive ? AppColors.flow : AppColors.alert),
+                      ),
                     ],
                   ),
                 ],
@@ -103,8 +98,13 @@ class _MonthlyReportsScreenState extends State<MonthlyReportsScreen> {
       children: [
         Text(label, style: Theme.of(context).textTheme.bodySmall),
         const SizedBox(height: 2),
-        Text(_currencyFormat.format(value),
-            style: AppTheme.amountStyle(size: 15, color: color)),
+        // Shrinks rather than overflows on narrow screens or with large
+        // figures — the other half of the "fits on all phones" fix.
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: Text(_currencyFormat.format(value), style: AppTheme.amountStyle(size: 15, color: color)),
+        ),
       ],
     );
   }
